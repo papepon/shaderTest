@@ -23,6 +23,10 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
     [Range(0f, 1f)]
     public float strength = 1.0f;
 
+    [Header("Artifact Reduction")]
+
+    [Range(0f, 0.1f)] public float edgeFadeThreshold = 0.01f;
+
     // =========================================================
     //  内部変数
     // =========================================================
@@ -39,22 +43,7 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
             renderPassEvent = RenderPassEvent.AfterRenderingOpaques
         };
     }
-    /*
-    public override void AddRenderPasses(ScriptableRenderer renderer,
-                                         ref RenderingData renderingData)
-    {
-        if (projectionTexture == null) return;
 
-        _pass.Setup(
-            projectionTexture,
-            projectorPosition,
-            Quaternion.Euler(projectorRotation),
-            orthoSize, nearClip, farClip, strength
-        );
-
-        renderer.EnqueuePass(_pass);
-    }
-    */
     public override void AddRenderPasses(ScriptableRenderer renderer,
                                      ref RenderingData renderingData)
     {
@@ -69,7 +58,8 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
             projectionTexture,
             projectorPosition,
             rotation,
-            orthoSize, nearClip, farClip, strength
+            orthoSize, nearClip, farClip, strength,
+            edgeFadeThreshold  // ✅ 追加
         );
 
         renderer.EnqueuePass(_pass);
@@ -86,26 +76,36 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
     class ProjectionRenderPass : ScriptableRenderPass, System.IDisposable
     {
         static readonly int ID_ProjectorVP = Shader.PropertyToID("_ProjectorVP");
-        static readonly int ID_InvVP = Shader.PropertyToID("_InvVP");
         static readonly int ID_ProjectorTex = Shader.PropertyToID("_ProjectorTex");
         static readonly int ID_Strength = Shader.PropertyToID("_ProjectionStrength");
 
-
+        // PropertyID追加
+        static readonly int ID_EdgeFadeThreshold = Shader.PropertyToID("_EdgeFadeThreshold");
 
         Material _material;
         Texture2D _texture;
         Vector3 _position;
         Quaternion _rotation;
         float _orthoSize, _near, _far, _strength;
+        float _borderFade;
+        float _edgeFadeThreshold;
 
         public ProjectionRenderPass()
         {
-            _material = CoreUtils.CreateEngineMaterial("Hidden/ProjectionFullscreen");
+            var shader = Shader.Find("Hidden/ProjectionFullscreen");
+            if (shader == null)
+            {
+                Debug.LogError("[Projection] Shader 'Hidden/ProjectionFullscreen' が見つかりません。" +
+                               "シェーダーファイルの1行目を確認してください。");
+                return;
+            }
+            _material = CoreUtils.CreateEngineMaterial(shader);
         }
 
         public void Setup(Texture2D tex,
                           Vector3 position, Quaternion rotation,
-                          float orthoSize, float near, float far, float strength)
+                          float orthoSize, float near, float far, float strength,
+                          float edgeFadeThreshold)
         {
             _texture = tex;
             _position = position;
@@ -114,10 +114,15 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
             _near = near;
             _far = far;
             _strength = strength;
+            _edgeFadeThreshold = edgeFadeThreshold; // ✅ 追加
         }
 
         void UpdateShaderProperties(Camera mainCam)
         {
+            // ✅ テクスチャのWrapModeをRepeatに設定
+            if (_texture != null)
+                _texture.wrapMode = TextureWrapMode.Repeat;
+
             Matrix4x4 zFlip = Matrix4x4.Scale(new Vector3(1, 1, -1));
             Matrix4x4 viewMat = zFlip * Matrix4x4.TRS(
                                     _position, _rotation, Vector3.one).inverse;
@@ -139,6 +144,9 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
             _material.SetMatrix(ID_ProjectorVP, projectorVP);
             _material.SetTexture(ID_ProjectorTex, _texture);
             _material.SetFloat(ID_Strength, _strength);
+
+
+            _material.SetFloat(ID_EdgeFadeThreshold, _edgeFadeThreshold);
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph,
@@ -176,7 +184,8 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
             {
                 CommandBuffer cmd = CommandBufferHelpers.GetNativeCommandBuffer(ctx.cmd);
 
-                cmd.SetGlobalTexture("_BlitTexture", data.colorTarget);
+                // ✅ _BlitTexture の設定を削除
+                // DrawProceduralはカラーバッファを直接読めないため
                 cmd.SetGlobalTexture("_CameraDepthTexture", data.depthTex);
 
                 cmd.DrawProcedural(
@@ -198,7 +207,8 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
 
         public void Dispose()
         {
-            CoreUtils.Destroy(_material);
+            if (_material != null)
+                CoreUtils.Destroy(_material);
         }
     }
 }

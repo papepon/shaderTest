@@ -20,7 +20,7 @@ Shader "Hidden/ProjectionFullscreen"
             Name "ProjectionFullscreen"
             ZWrite Off
             ZTest  Always
-            Blend  Off
+            Blend SrcAlpha OneMinusSrcAlpha
             Cull   Off
 
             HLSLPROGRAM
@@ -30,6 +30,7 @@ Shader "Hidden/ProjectionFullscreen"
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareNormalsTexture.hlsl"
 
             struct Attributes
             {
@@ -57,22 +58,25 @@ Shader "Hidden/ProjectionFullscreen"
                 return output;
             }
 
-            TEXTURE2D(_BlitTexture);      SAMPLER(sampler_BlitTexture);
+            //TEXTURE2D(_BlitTexture);      SAMPLER(sampler_BlitTexture);
+            TEXTURE2D(_CameraOpaqueTexture); SAMPLER(sampler_CameraOpaqueTexture);
             TEXTURE2D(_ProjectorTex);     SAMPLER(sampler_ProjectorTex);
 
             CBUFFER_START(UnityPerMaterial)
-                float4 _BlitTexture_ST;
-                float4 _ProjectorTex_ST;
-                float  _ProjectionStrength;
+                float4   _BlitTexture_ST;
+                float4   _ProjectorTex_ST;
+                float    _ProjectionStrength;
                 float4x4 _ProjectorVP;
-                float4x4 _InvVP;
+                float    _BorderFade;        // ✅ 追加 境界フェードの幅(0=なし 0.1=緩やか)
+                float    _EdgeFadeThreshold; // ✅ 追加 輪郭フェードの閾値(0.01〜0.1)
             CBUFFER_END
 
             half4 Frag(Varyings input) : SV_Target
             {
                 float2 uv = input.texcoord;
 
-                half4 baseColor = SAMPLE_TEXTURE2D(_BlitTexture, sampler_BlitTexture, uv);
+                //half4 baseColor = SAMPLE_TEXTURE2D(_BlitTexture, sampler_BlitTexture, uv);
+                half4 baseColor = SAMPLE_TEXTURE2D(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, uv);
 
                 float rawDepth = SampleSceneDepth(uv);
 
@@ -85,17 +89,33 @@ Shader "Hidden/ProjectionFullscreen"
                 float3 worldPos = ComputeWorldSpacePosition(uv, rawDepth, UNITY_MATRIX_I_VP);
 
                 float4 projClip = mul(_ProjectorVP, float4(worldPos, 1.0));
-
-                // ✅ Near/FarClipをprojClip.zで判定
-                // Orthographic行列変換後のZ値は[-1, 1]の範囲が有効
                 if (projClip.z < -1.0 || projClip.z > 1.0) return baseColor;
 
-                float2 tiledUV = frac(projClip.xy * 0.5 + 0.5);
 
+                float2 texelSize = _ScreenParams.zw - 1.0;
+
+                float depthR = SampleSceneDepth(uv + float2(texelSize.x, 0));
+                float depthU = SampleSceneDepth(uv + float2(0, texelSize.y));
+                float depthL = SampleSceneDepth(uv - float2(texelSize.x, 0));
+                float depthD = SampleSceneDepth(uv - float2(0, texelSize.y));
+
+                float maxDepthDiff = max(max(abs(rawDepth - depthR), abs(rawDepth - depthL)),
+                                         max(abs(rawDepth - depthU), abs(rawDepth - depthD)));
+
+                float edgeMask = step(maxDepthDiff, _EdgeFadeThreshold);
+
+                // ★ Strength=0のとき強制的に元画像を返す確認
+                //return baseColor;
+
+                float2 tiledUV  = projClip.xy * 0.5 + 0.5;
                 half4 projColor = SAMPLE_TEXTURE2D(_ProjectorTex, sampler_ProjectorTex, tiledUV);
 
-                float blend = projColor.a * _ProjectionStrength;
-                return half4(lerp(baseColor.rgb, projColor.rgb, blend), baseColor.a);
+                float blend = projColor.a * _ProjectionStrength * edgeMask;
+
+// ✅ アルファチャンネルにblendを渡す（Blendステートが使う）
+return half4(lerp(baseColor.rgb, projColor.rgb, blend), blend);
+
+                
             }
             ENDHLSL
         }
