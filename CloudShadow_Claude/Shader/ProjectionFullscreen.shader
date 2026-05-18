@@ -31,6 +31,7 @@ Shader "Hidden/ProjectionFullscreen"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareNormalsTexture.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
             struct Attributes
             {
@@ -61,6 +62,9 @@ Shader "Hidden/ProjectionFullscreen"
             //TEXTURE2D(_BlitTexture);      SAMPLER(sampler_BlitTexture);
             TEXTURE2D(_CameraOpaqueTexture); SAMPLER(sampler_CameraOpaqueTexture);
             TEXTURE2D(_ProjectorTex);     SAMPLER(sampler_ProjectorTex);
+
+            // URPのスクリーンスペースシャドウ
+            //TEXTURE2D(_ScreenSpaceShadowmapTexture); SAMPLER(sampler_ScreenSpaceShadowmapTexture);
 
             CBUFFER_START(UnityPerMaterial)
                 float4   _BlitTexture_ST;
@@ -110,11 +114,17 @@ Shader "Hidden/ProjectionFullscreen"
                 float2 tiledUV  = projClip.xy * 0.5 + 0.5;
                 half4 projColor = SAMPLE_TEXTURE2D(_ProjectorTex, sampler_ProjectorTex, tiledUV);
 
-                float blend = projColor.a * _ProjectionStrength * edgeMask;
+                // ✅ ライトカラーとアンビエントから影色を近似
+                float3 mainLightColor = _MainLightColor.rgb;
+                float3 ambientColor   = unity_AmbientSky.rgb;
 
-// ✅ アルファチャンネルにblendを渡す（Blendステートが使う）
-return half4(lerp(baseColor.rgb, projColor.rgb, blend), blend);
+                float3 shadowRatio = ambientColor / max(ambientColor + mainLightColor, 0.0001);
 
+                float  cloudMask     = (1.0 - projColor.r) * edgeMask; // ✅ 反転：黒=影、白=影なし
+                float3 shadowedColor = lerp(baseColor.rgb, baseColor.rgb * shadowRatio, cloudMask * _ProjectionStrength);
+
+                // ✅ Strength=0のとき完全に元画像
+                return half4(shadowedColor, 1.0);
                 
             }
             ENDHLSL

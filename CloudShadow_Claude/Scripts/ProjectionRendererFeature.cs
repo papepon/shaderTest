@@ -40,7 +40,9 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
         _pass = new ProjectionRenderPass
         {
             // ✅ AfterRenderingOpaques → 深度が確定した後
-            renderPassEvent = RenderPassEvent.AfterRenderingOpaques
+            //renderPassEvent = RenderPassEvent.AfterRenderingOpaques
+            // ✅ AfterRenderingOpaques → AfterRendering に変更
+            renderPassEvent = RenderPassEvent.AfterRendering
         };
     }
 
