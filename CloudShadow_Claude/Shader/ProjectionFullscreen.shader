@@ -20,7 +20,9 @@ Shader "Hidden/ProjectionFullscreen"
             Name "ProjectionFullscreen"
             ZWrite Off
             ZTest  Always
-            Blend SrcAlpha OneMinusSrcAlpha
+            //Blend SrcAlpha OneMinusSrcAlpha
+            // ✅ 加算ブレンド（負の値で暗くする）
+Blend DstColor Zero
             Cull   Off
 
             HLSLPROGRAM
@@ -76,57 +78,47 @@ Shader "Hidden/ProjectionFullscreen"
             CBUFFER_END
 
             half4 Frag(Varyings input) : SV_Target
-            {
-                float2 uv = input.texcoord;
+{
+    float2 uv = input.texcoord;
 
-                //half4 baseColor = SAMPLE_TEXTURE2D(_BlitTexture, sampler_BlitTexture, uv);
-                half4 baseColor = SAMPLE_TEXTURE2D(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, uv);
+    float rawDepth = SampleSceneDepth(uv);
 
-                float rawDepth = SampleSceneDepth(uv);
+    #if UNITY_REVERSED_Z
+        if (rawDepth <= 0.0001) return half4(1,1,1,1); // ✅ 1.0=変化なし
+    #else
+        if (rawDepth >= 0.9999) return half4(1,1,1,1);
+    #endif
 
-                #if UNITY_REVERSED_Z
-                    if (rawDepth <= 0.0001) return baseColor;
-                #else
-                    if (rawDepth >= 0.9999) return baseColor;
-                #endif
+    float3 worldPos = ComputeWorldSpacePosition(uv, rawDepth, UNITY_MATRIX_I_VP);
+    float4 projClip = mul(_ProjectorVP, float4(worldPos, 1.0));
+    if (projClip.z < -1.0 || projClip.z > 1.0) return half4(1,1,1,1);
 
-                float3 worldPos = ComputeWorldSpacePosition(uv, rawDepth, UNITY_MATRIX_I_VP);
+    float2 texelSize    = _ScreenParams.zw - 1.0;
+    float  depthR       = SampleSceneDepth(uv + float2(texelSize.x, 0));
+    float  depthU       = SampleSceneDepth(uv + float2(0, texelSize.y));
+    float  depthL       = SampleSceneDepth(uv - float2(texelSize.x, 0));
+    float  depthD       = SampleSceneDepth(uv - float2(0, texelSize.y));
+    float  maxDepthDiff = max(max(abs(rawDepth - depthR), abs(rawDepth - depthL)),
+                              max(abs(rawDepth - depthU), abs(rawDepth - depthD)));
+    float  edgeMask     = step(maxDepthDiff, _EdgeFadeThreshold);
 
-                float4 projClip = mul(_ProjectorVP, float4(worldPos, 1.0));
-                if (projClip.z < -1.0 || projClip.z > 1.0) return baseColor;
+    float2 tiledUV   = projClip.xy * 0.5 + 0.5;
+    half4  projColor = SAMPLE_TEXTURE2D(_ProjectorTex, sampler_ProjectorTex, tiledUV);
 
+    float3 mainLightColor = _MainLightColor.rgb;
+    float3 ambientColor   = unity_AmbientSky.rgb;
 
-                float2 texelSize = _ScreenParams.zw - 1.0;
+    // 影の明るさ比率（ambient / 全体光）
+    float3 shadowRatio = ambientColor / max(ambientColor + mainLightColor, 0.0001);
 
-                float depthR = SampleSceneDepth(uv + float2(texelSize.x, 0));
-                float depthU = SampleSceneDepth(uv + float2(0, texelSize.y));
-                float depthL = SampleSceneDepth(uv - float2(texelSize.x, 0));
-                float depthD = SampleSceneDepth(uv - float2(0, texelSize.y));
+    // cloudMask: 0=影なし(1.0倍) 1=影あり(shadowRatio倍)
+    float  cloudMask    = (1.0 - projColor.r) * edgeMask * _ProjectionStrength;
 
-                float maxDepthDiff = max(max(abs(rawDepth - depthR), abs(rawDepth - depthL)),
-                                         max(abs(rawDepth - depthU), abs(rawDepth - depthD)));
+    // ✅ 乗算値：影なし=1.0（変化なし）、影あり=shadowRatio（暗くなる）
+    float3 multiplier = lerp(float3(1,1,1), shadowRatio, cloudMask);
 
-                float edgeMask = step(maxDepthDiff, _EdgeFadeThreshold);
-
-                // ★ Strength=0のとき強制的に元画像を返す確認
-                //return baseColor;
-
-                float2 tiledUV  = projClip.xy * 0.5 + 0.5;
-                half4 projColor = SAMPLE_TEXTURE2D(_ProjectorTex, sampler_ProjectorTex, tiledUV);
-
-                // ✅ ライトカラーとアンビエントから影色を近似
-                float3 mainLightColor = _MainLightColor.rgb;
-                float3 ambientColor   = unity_AmbientSky.rgb;
-
-                float3 shadowRatio = ambientColor / max(ambientColor + mainLightColor, 0.0001);
-
-                float  cloudMask     = (1.0 - projColor.r) * edgeMask; // ✅ 反転：黒=影、白=影なし
-                float3 shadowedColor = lerp(baseColor.rgb, baseColor.rgb * shadowRatio, cloudMask * _ProjectionStrength);
-
-                // ✅ Strength=0のとき完全に元画像
-                return half4(shadowedColor, 1.0);
-                
-            }
+    return half4(multiplier, 1.0);
+}
             ENDHLSL
         }
     }

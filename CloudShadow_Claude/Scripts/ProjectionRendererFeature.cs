@@ -43,25 +43,26 @@ public class ProjectionRendererFeature : ScriptableRendererFeature
             //renderPassEvent = RenderPassEvent.AfterRenderingOpaques
             // ✅ AfterRenderingOpaques → AfterRendering に変更
             renderPassEvent = RenderPassEvent.AfterRendering
+
         };
     }
 
     public override void AddRenderPasses(ScriptableRenderer renderer,
                                      ref RenderingData renderingData)
     {
-        if (projectionTexture == null) return;
+        // ✅ nullチェックを削除（Textureなしでも実行）
+        // if (projectionTexture == null) return;
 
-        // ✅ 基準姿勢を真下向き(-Y)にしてから、インスペクタの回転を追加適用
-        Quaternion baseRotation = Quaternion.Euler(-90f, 0f, 0f); // 真下向き基準
-        Quaternion extraRotation = Quaternion.Euler(projectorRotation); // インスペクタの値
+        Quaternion baseRotation = Quaternion.Euler(-90f, 0f, 0f);
+        Quaternion extraRotation = Quaternion.Euler(projectorRotation);
         Quaternion rotation = extraRotation * baseRotation;
 
         _pass.Setup(
-            projectionTexture,
+            projectionTexture,  // nullでも渡す
             projectorPosition,
             rotation,
             orthoSize, nearClip, farClip, strength,
-            edgeFadeThreshold  // ✅ 追加
+            edgeFadeThreshold
         );
 
         renderer.EnqueuePass(_pass);
